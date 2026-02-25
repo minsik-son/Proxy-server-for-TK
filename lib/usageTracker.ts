@@ -5,7 +5,7 @@ function getSupabaseClient() {
   const key = process.env.SUPABASE_SERVICE_KEY;
 
   if (!url || !key) {
-    throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_KEY");
+    return null; // Supabase not configured — skip tracking
   }
 
   return createClient(url, key);
@@ -20,6 +20,8 @@ function getCurrentMonth(): string {
 
 export async function getUsage(deviceId: string): Promise<number> {
   const supabase = getSupabaseClient();
+  if (!supabase) return 0; // No tracking — return 0 usage
+
   const month = getCurrentMonth();
 
   const { data, error } = await supabase
@@ -30,7 +32,8 @@ export async function getUsage(deviceId: string): Promise<number> {
     .single();
 
   if (error && error.code !== "PGRST116") {
-    throw new Error(`Failed to get usage: ${error.message}`);
+    console.warn(`Failed to get usage: ${error.message}`);
+    return 0;
   }
 
   return data?.char_count ?? 0;
@@ -41,6 +44,8 @@ export async function addUsage(
   charCount: number
 ): Promise<void> {
   const supabase = getSupabaseClient();
+  if (!supabase) return; // No tracking — skip silently
+
   const month = getCurrentMonth();
 
   const { data: existing } = await supabase
@@ -61,7 +66,7 @@ export async function addUsage(
       .eq("month", month);
 
     if (error) {
-      throw new Error(`Failed to update usage: ${error.message}`);
+      console.warn(`Failed to update usage: ${error.message}`);
     }
   } else {
     const { error } = await supabase.from("usage").insert({
@@ -72,7 +77,7 @@ export async function addUsage(
     });
 
     if (error) {
-      throw new Error(`Failed to insert usage: ${error.message}`);
+      console.warn(`Failed to insert usage: ${error.message}`);
     }
   }
 }
