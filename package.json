@@ -1,0 +1,20 @@
+{
+  "name": "translator-keyboard-api",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "tsc",
+    "lint": "eslint . --ext .ts"
+  },
+  "dependencies": {
+    "deepl-node": "^1.14.0",
+    "openai": "^4.77.0",
+    "@supabase/supabase-js": "^2.47.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@vercel/node": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}
