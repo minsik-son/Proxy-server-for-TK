@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { checkRateLimit } from "../lib/rateLimiter";
-import { getUsage, addUsage } from "../lib/usageTracker";
+import { addUsage } from "../lib/usageTracker";
 import { routeTranslation } from "../lib/engineRouter";
 
 const VALID_LANGUAGES = [
@@ -70,27 +70,22 @@ export default async function handler(
       return;
     }
 
-    // Get current usage
-    const monthlyUsage = await getUsage(deviceId);
-
-    // Route and translate
+    // Route and translate (pass 0 for usage since Supabase is optional)
     const { translatedText, engine } = await routeTranslation(
       text,
       sourceLang,
       targetLang,
       tier,
-      monthlyUsage
+      0
     );
 
-    const charCount = text.length;
-
-    // Update usage
-    await addUsage(deviceId, charCount);
+    // Usage tracking (non-blocking)
+    addUsage(deviceId, text.length).catch(() => {});
 
     res.status(200).json({
       translatedText,
       engine,
-      charCount,
+      charCount: text.length,
     });
   } catch (error) {
     console.error("Translation error:", error);

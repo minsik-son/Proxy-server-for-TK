@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { checkRateLimit } from "../lib/rateLimiter";
-import { getUsage, addUsage } from "../lib/usageTracker";
+import { addUsage } from "../lib/usageTracker";
 
 const VALID_LANGUAGES = [
   "ko", "en", "ja", "zh", "es", "fr", "de", "pt", "ru", "it",
@@ -40,7 +40,15 @@ async function correctWithGemini(text: string, language: string): Promise<string
   if (!apiKey) throw new Error("NO_GEMINI_KEY");
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 256,
+      // @ts-ignore - disable thinking for faster response
+      thinkingConfig: { thinkingBudget: 0 },
+    } as any,
+  });
 
   const prompt = `${SYSTEM_PROMPT(language)}\n\nText: ${text}`;
   const result = await model.generateContent(prompt);
@@ -147,14 +155,11 @@ export default async function handler(
       return;
     }
 
-    // Usage tracking
-    await getUsage(deviceId);
-
     // Call AI for correction (auto-selects available provider with fallback)
     const { correctedText, engine } = await correctText(text.trim(), language);
 
-    const charCount = text.length;
-    await addUsage(deviceId, charCount);
+    // Usage tracking (non-blocking)
+    addUsage(deviceId, text.length).catch(() => {});
 
     res.status(200).json({ correctedText, engine });
   } catch (error) {

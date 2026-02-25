@@ -110,7 +110,15 @@ async function translateWithGemini(
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",
+    generationConfig: {
+      temperature: 0.3,
+      maxOutputTokens: 512,
+      // @ts-ignore - disable thinking for faster response
+      thinkingConfig: { thinkingBudget: 0 },
+    } as any,
+  });
 
   const prompt = `You are a professional translator. Translate the given text from ${sourceLang} to ${targetLang}. Output only the translated text without any explanations or additional text.\n\nText: ${text}`;
   const result = await model.generateContent(prompt);
