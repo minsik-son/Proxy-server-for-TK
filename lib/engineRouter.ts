@@ -25,7 +25,7 @@ const DEEPL_TARGET_LANGS: Record<string, deepl.TargetLanguageCode> = {
   ko: "ko",
   en: "en-US",
   ja: "ja",
-  zh: "zh-Hans",
+  zh: "zh-HANS",
   es: "es",
   fr: "fr",
   de: "de",

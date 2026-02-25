@@ -10,6 +10,7 @@
   "dependencies": {
     "deepl-node": "^1.14.0",
     "openai": "^4.77.0",
+    "@google/generative-ai": "^0.21.0",
     "@supabase/supabase-js": "^2.47.0"
   },
   "devDependencies": {
