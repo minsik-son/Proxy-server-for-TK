@@ -40,7 +40,7 @@ async function correctWithGemini(text: string, language: string): Promise<string
   if (!apiKey) throw new Error("NO_GEMINI_KEY");
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
   const prompt = `${SYSTEM_PROMPT(language)}\n\nText: ${text}`;
   const result = await model.generateContent(prompt);
