@@ -1,9 +1,10 @@
 import * as deepl from "deepl-node";
 import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 interface TranslationResult {
   translatedText: string;
-  engine: "deepl" | "gpt-4o-mini";
+  engine: "deepl" | "gpt-4o-mini" | "gemini";
 }
 
 const DEEPL_CHAR_LIMIT = 135_000;
@@ -69,7 +70,7 @@ async function translateWithGPT(
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error("Missing OPENAI_API_KEY");
+    throw new Error("NO_OPENAI_KEY");
   }
 
   const openai = new OpenAI({ apiKey });
@@ -98,6 +99,61 @@ async function translateWithGPT(
   return translated;
 }
 
+async function translateWithGemini(
+  text: string,
+  sourceLang: string,
+  targetLang: string
+): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("NO_GEMINI_KEY");
+  }
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+  const prompt = `You are a professional translator. Translate the given text from ${sourceLang} to ${targetLang}. Output only the translated text without any explanations or additional text.\n\nText: ${text}`;
+  const result = await model.generateContent(prompt);
+  const translated = result.response.text().trim();
+
+  if (!translated) {
+    throw new Error("Empty response from Gemini");
+  }
+
+  return translated;
+}
+
+// Try available AI providers (GPT or Gemini) with fallback
+async function translateWithAI(
+  text: string,
+  sourceLang: string,
+  targetLang: string
+): Promise<{ translatedText: string; engine: "gpt-4o-mini" | "gemini" }> {
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  const hasGemini = !!process.env.GEMINI_API_KEY;
+
+  if (!hasOpenAI && !hasGemini) {
+    throw new Error("No AI API key configured. Set OPENAI_API_KEY or GEMINI_API_KEY.");
+  }
+
+  // Build provider list: try available ones in order
+  const providers: Array<{ fn: () => Promise<string>; engine: "gpt-4o-mini" | "gemini" }> = [];
+  if (hasOpenAI) providers.push({ fn: () => translateWithGPT(text, sourceLang, targetLang), engine: "gpt-4o-mini" });
+  if (hasGemini) providers.push({ fn: () => translateWithGemini(text, sourceLang, targetLang), engine: "gemini" });
+
+  for (const provider of providers) {
+    try {
+      const translatedText = await provider.fn();
+      return { translatedText, engine: provider.engine };
+    } catch (error) {
+      console.warn(`Translation provider ${provider.engine} failed:`, error);
+      continue;
+    }
+  }
+
+  throw new Error("All AI providers failed");
+}
+
 export async function routeTranslation(
   text: string,
   sourceLang: string,
@@ -105,24 +161,24 @@ export async function routeTranslation(
   tier: "free" | "pro",
   monthlyUsage: number
 ): Promise<TranslationResult> {
-  // Free tier → always GPT-4o-mini
+  // Free tier → AI (GPT or Gemini, whichever is available)
   if (tier === "free") {
-    const translatedText = await translateWithGPT(text, sourceLang, targetLang);
-    return { translatedText, engine: "gpt-4o-mini" };
+    const { translatedText, engine } = await translateWithAI(text, sourceLang, targetLang);
+    return { translatedText, engine };
   }
 
-  // Pro tier with usage over limit → GPT-4o-mini
+  // Pro tier with usage over limit → AI
   if (monthlyUsage > DEEPL_CHAR_LIMIT) {
-    const translatedText = await translateWithGPT(text, sourceLang, targetLang);
-    return { translatedText, engine: "gpt-4o-mini" };
+    const { translatedText, engine } = await translateWithAI(text, sourceLang, targetLang);
+    return { translatedText, engine };
   }
 
-  // Pro tier within limit → try DeepL, fallback to GPT-4o-mini
+  // Pro tier within limit → try DeepL, fallback to AI
   try {
     const translatedText = await translateWithDeepL(text, sourceLang, targetLang);
     return { translatedText, engine: "deepl" };
   } catch {
-    const translatedText = await translateWithGPT(text, sourceLang, targetLang);
-    return { translatedText, engine: "gpt-4o-mini" };
+    const { translatedText, engine } = await translateWithAI(text, sourceLang, targetLang);
+    return { translatedText, engine };
   }
 }
