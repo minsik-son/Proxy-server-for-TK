@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { checkRateLimit } from "../lib/rateLimiter";
-import { addUsage } from "../lib/usageTracker";
+// import { checkRateLimit } from "../lib/rateLimiter";
+// import { addUsage } from "../lib/usageTracker";
 import { routeTranslation } from "../lib/engineRouter";
 
 const VALID_LANGUAGES = [
@@ -25,7 +25,7 @@ export default async function handler(
   }
 
   try {
-    const { text, sourceLang, targetLang, tier, deviceId } = req.body;
+    const { text, sourceLang, targetLang, tier } = req.body;
 
     // Validate input
     if (!text || typeof text !== "string" || text.trim().length === 0) {
@@ -50,37 +50,14 @@ export default async function handler(
       return;
     }
 
-    if (!tier || (tier !== "free" && tier !== "pro")) {
-      res.status(400).json({ error: "tier must be 'free' or 'pro'" });
-      return;
-    }
-
-    if (!deviceId || typeof deviceId !== "string") {
-      res.status(400).json({ error: "deviceId is required" });
-      return;
-    }
-
-    // Rate limit check
-    const rateLimitResult = checkRateLimit(deviceId, tier);
-    if (!rateLimitResult.allowed) {
-      res.status(429).json({
-        error: "Rate limit exceeded",
-        retryAfter: rateLimitResult.retryAfter,
-      });
-      return;
-    }
-
-    // Route and translate (pass 0 for usage since Supabase is optional)
+    // Route and translate
     const { translatedText, engine } = await routeTranslation(
       text,
       sourceLang,
       targetLang,
-      tier,
+      tier || "free",
       0
     );
-
-    // Usage tracking (non-blocking)
-    addUsage(deviceId, text.length).catch(() => {});
 
     res.status(200).json({
       translatedText,

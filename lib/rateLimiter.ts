@@ -8,8 +8,8 @@ interface RateLimitResult {
 }
 
 const LIMITS: Record<string, number> = {
-  free: 10,
-  pro: 30,
+  free: 60,
+  pro: 120,
 };
 
 const WINDOW_MS = 60 * 1000; // 1 minute

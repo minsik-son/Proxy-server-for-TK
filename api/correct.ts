@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { checkRateLimit } from "../lib/rateLimiter";
-import { addUsage } from "../lib/usageTracker";
+// import { checkRateLimit } from "../lib/rateLimiter";
+// import { addUsage } from "../lib/usageTracker";
 
 const VALID_LANGUAGES = [
   "ko", "en", "ja", "zh", "es", "fr", "de", "pt", "ru", "it",
@@ -135,31 +135,13 @@ export default async function handler(
       return;
     }
 
-    if (!tier || (tier !== "free" && tier !== "pro")) {
-      res.status(400).json({ error: "tier must be 'free' or 'pro'" });
-      return;
-    }
-
-    if (!deviceId || typeof deviceId !== "string") {
-      res.status(400).json({ error: "deviceId is required" });
-      return;
-    }
-
-    // Rate limit check
-    const rateLimitResult = checkRateLimit(deviceId, tier);
-    if (!rateLimitResult.allowed) {
-      res.status(429).json({
-        error: "Rate limit exceeded",
-        retryAfter: rateLimitResult.retryAfter,
-      });
-      return;
-    }
+    // tier and deviceId validation disabled for now
 
     // Call AI for correction (auto-selects available provider with fallback)
     const { correctedText, engine } = await correctText(text.trim(), language);
 
-    // Usage tracking (non-blocking)
-    addUsage(deviceId, text.length).catch(() => {});
+    // Usage tracking disabled for now
+    // addUsage(deviceId, text.length).catch(() => {});
 
     res.status(200).json({ correctedText, engine });
   } catch (error) {
