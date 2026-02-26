@@ -1,8 +1,6 @@
-import type { VercelRequest, VercelResponse } from "@vercel/node";
-import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-// import { checkRateLimit } from "../lib/rateLimiter";
-// import { addUsage } from "../lib/usageTracker";
+
+export const config = { runtime: "edge" };
 
 const VALID_LANGUAGES = [
   "ko", "en", "ja", "zh", "es", "fr", "de", "pt", "ru", "it",
@@ -10,32 +8,34 @@ const VALID_LANGUAGES = [
 
 const MAX_TEXT_LENGTH = 200;
 
-const SYSTEM_PROMPT = (language: string) =>
-  `You are a text correction assistant.\nFix spelling errors, typos, and grammar mistakes in the given text.\nKeep the meaning and style unchanged. Only return the corrected text with no explanation.\nIf the text has no errors, return it exactly as-is.\nLanguage: ${language}`;
+const TONE_INSTRUCTIONS: Record<string, string> = {
+  none: "",
+  formal:
+    "\nConvert the text to formal/polite language (존댓말/격식체 in Korean). Use honorifics and polite endings.",
+  casual:
+    "\nConvert the text to casual/informal language (반말 in Korean). Use informal endings and relaxed tone.",
+  business:
+    "\nConvert the text to professional business tone. Use formal but concise language suitable for workplace communication.",
+  friendly:
+    "\nConvert the text to a warm, friendly tone. Make it sound approachable and personable while keeping it natural.",
+};
 
-// ── AI Provider Functions ──────────────────────────────
+const SYSTEM_PROMPT = (language: string, tone: string = "none") => {
+  if (tone === "none" || !tone) {
+    return `You are a text correction assistant.\nFix spelling errors, typos, and grammar mistakes in the given text.\nKeep the meaning and style unchanged. Only return the corrected text with no explanation.\nIf the text has no errors, return it exactly as-is.\nLanguage: ${language}`;
+  }
 
-async function correctWithOpenAI(text: string, language: string): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("NO_OPENAI_KEY");
+  const toneInstruction = TONE_INSTRUCTIONS[tone] || "";
+  return `You are a text correction and style conversion assistant.\nFirst, fix any spelling errors, typos, and grammar mistakes in the given text.\nThen, convert the corrected text to the specified tone/style.${toneInstruction}\nOnly return the final result with no explanation.\nKeep the original meaning intact.\nLanguage: ${language}`;
+};
 
-  const openai = new OpenAI({ apiKey });
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT(language) },
-      { role: "user", content: text },
-    ],
-    temperature: 0.1,
-    max_tokens: 500,
-  });
+// ── Gemini (primary) ─────────────────────────────────
 
-  const result = response.choices[0]?.message?.content?.trim();
-  if (!result) throw new Error("Empty response from OpenAI");
-  return result;
-}
-
-async function correctWithGemini(text: string, language: string): Promise<string> {
+async function correctWithGemini(
+  text: string,
+  language: string,
+  tone: string
+): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("NO_GEMINI_KEY");
 
@@ -45,12 +45,12 @@ async function correctWithGemini(text: string, language: string): Promise<string
     generationConfig: {
       temperature: 0.1,
       maxOutputTokens: 256,
-      // @ts-ignore - disable thinking for faster response
+      // @ts-ignore
       thinkingConfig: { thinkingBudget: 0 },
     } as any,
   });
 
-  const prompt = `${SYSTEM_PROMPT(language)}\n\nText: ${text}`;
+  const prompt = `${SYSTEM_PROMPT(language, tone)}\n\nText: ${text}`;
   const result = await model.generateContent(prompt);
   const corrected = result.response.text().trim();
 
@@ -58,94 +58,130 @@ async function correctWithGemini(text: string, language: string): Promise<string
   return corrected;
 }
 
-// ── Provider Selection ─────────────────────────────────
+// ── OpenAI (fallback) ────────────────────────────────
 
-type Provider = "openai" | "gemini";
+async function correctWithOpenAI(
+  text: string,
+  language: string,
+  tone: string
+): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("NO_OPENAI_KEY");
 
-function getAvailableProviders(): Provider[] {
-  const providers: Provider[] = [];
-  if (process.env.OPENAI_API_KEY) providers.push("openai");
-  if (process.env.GEMINI_API_KEY) providers.push("gemini");
-  return providers;
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT(language, tone) },
+        { role: "user", content: text },
+      ],
+      temperature: 0.1,
+      max_tokens: 500,
+    }),
+  });
+
+  const data = await res.json();
+  const result = data.choices?.[0]?.message?.content?.trim();
+  if (!result) throw new Error("Empty response from OpenAI");
+  return result;
 }
 
-async function correctText(text: string, language: string): Promise<{ correctedText: string; engine: string }> {
-  const providers = getAvailableProviders();
+// ── Provider selection with fallback ─────────────────
 
-  if (providers.length === 0) {
-    throw new Error("No AI API key configured. Set OPENAI_API_KEY or GEMINI_API_KEY.");
+async function correctText(
+  text: string,
+  language: string,
+  tone: string
+): Promise<{ correctedText: string; engine: string }> {
+  const hasGemini = !!process.env.GEMINI_API_KEY;
+  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+
+  if (!hasGemini && !hasOpenAI) {
+    throw new Error("No AI API key configured.");
   }
 
-  // Primary: try first available provider
-  // Fallback: if first fails and second exists, try second
-  for (const provider of providers) {
+  // Try Gemini first (faster), fallback to OpenAI
+  if (hasGemini) {
     try {
-      if (provider === "openai") {
-        const corrected = await correctWithOpenAI(text, language);
+      const corrected = await correctWithGemini(text, language, tone);
+      return { correctedText: corrected, engine: "gemini" };
+    } catch (e) {
+      console.warn("Gemini failed:", e);
+      if (hasOpenAI) {
+        const corrected = await correctWithOpenAI(text, language, tone);
         return { correctedText: corrected, engine: "openai" };
-      } else {
-        const corrected = await correctWithGemini(text, language);
-        return { correctedText: corrected, engine: "gemini" };
       }
-    } catch (error) {
-      console.warn(`Provider ${provider} failed:`, error);
-      // Continue to next provider if available
-      continue;
+      throw e;
     }
   }
 
-  throw new Error("All AI providers failed");
+  const corrected = await correctWithOpenAI(text, language, tone);
+  return { correctedText: corrected, engine: "openai" };
 }
 
-// ── Handler ────────────────────────────────────────────
+// ── Edge Handler ─────────────────────────────────────
 
-export default async function handler(
-  req: VercelRequest,
-  res: VercelResponse
-): Promise<void> {
+export default async function handler(req: Request): Promise<Response> {
   // CORS preflight
   if (req.method === "OPTIONS") {
-    res.status(200).end();
-    return;
+    return new Response(null, {
+      status: 200,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
   }
 
   if (req.method !== "POST") {
-    res.status(405).json({ error: "Method not allowed" });
-    return;
+    return Response.json({ error: "Method not allowed" }, { status: 405 });
   }
 
-  try {
-    const { text, language, tier, deviceId } = req.body;
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Content-Type": "application/json",
+  };
 
-    // Validate input
+  try {
+    const body = await req.json();
+    const { text, language, tone } = body;
+
+    const validTones = ["none", "formal", "casual", "business", "friendly"];
+    const safeTone = validTones.includes(tone) ? tone : "none";
+
     if (!text || typeof text !== "string" || text.trim().length === 0) {
-      res.status(400).json({ error: "text is required" });
-      return;
+      return Response.json({ error: "text is required" }, { status: 400, headers });
     }
 
     if (text.length > MAX_TEXT_LENGTH) {
-      res
-        .status(400)
-        .json({ error: `text exceeds maximum length of ${MAX_TEXT_LENGTH}` });
-      return;
+      return Response.json(
+        { error: `text exceeds maximum length of ${MAX_TEXT_LENGTH}` },
+        { status: 400, headers }
+      );
     }
 
     if (!language || !VALID_LANGUAGES.includes(language)) {
-      res.status(400).json({ error: "Invalid language" });
-      return;
+      return Response.json({ error: "Invalid language" }, { status: 400, headers });
     }
 
-    // tier and deviceId validation disabled for now
+    const { correctedText, engine } = await correctText(
+      text.trim(),
+      language,
+      safeTone
+    );
 
-    // Call AI for correction (auto-selects available provider with fallback)
-    const { correctedText, engine } = await correctText(text.trim(), language);
-
-    // Usage tracking disabled for now
-    // addUsage(deviceId, text.length).catch(() => {});
-
-    res.status(200).json({ correctedText, engine });
+    return Response.json({ correctedText, engine }, { headers });
   } catch (error) {
     console.error("Correction error:", error);
-    res.status(500).json({ error: "Internal server error" });
+    return Response.json(
+      { error: "Internal server error" },
+      { status: 500, headers }
+    );
   }
 }
