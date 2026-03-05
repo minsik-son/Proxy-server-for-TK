@@ -10,23 +10,32 @@ const MAX_TEXT_LENGTH = 200;
 
 const TONE_INSTRUCTIONS: Record<string, string> = {
   none: "",
-  formal:
-    "\nConvert the text to formal/polite language (존댓말/격식체 in Korean). Use honorifics and polite endings.",
   casual:
-    "\nConvert the text to casual/informal language (반말 in Korean). Use informal endings and relaxed tone.",
-  business:
-    "\nConvert the text to professional business tone. Use formal but concise language suitable for workplace communication.",
-  friendly:
-    "\nConvert the text to a warm, friendly tone. Make it sound approachable and personable while keeping it natural.",
+    "\nConvert the text to casual/informal language (반말 in Korean). Use informal endings and relaxed tone (~해, ~야, ~거든). Do NOT add punctuation (commas, periods) that was not in the original text.",
+  formal:
+    "\nConvert the text to polite/formal language (존댓말 in Korean). Use 해요체 by default (~해요, ~이에요, ~하세요). If the context is clearly professional/business, use 합니다체 (~합니다, ~입니다). Do NOT add punctuation that was not in the original text.",
+  polished:
+    "\nKeep the original tone (반말/존댓말) exactly as-is, but properly insert all necessary punctuation marks: commas, periods, exclamation marks, question marks, etc. Ensure perfect spacing and clean sentence structure. This is a 'polished writing' mode — fix formatting and punctuation, not tone.",
 };
 
 const SYSTEM_PROMPT = (language: string, tone: string = "none") => {
   if (tone === "none" || !tone) {
-    return `You are a text correction assistant.\nFix spelling errors, typos, and grammar mistakes in the given text.\nKeep the meaning and style unchanged. Only return the corrected text with no explanation.\nIf the text has no errors, return it exactly as-is.\nLanguage: ${language}`;
+    return `You are a text correction assistant.
+Fix only spelling errors, typos, and spacing mistakes in the given text.
+CRITICAL RULE: Do NOT add any punctuation marks (commas, periods, exclamation marks, etc.) that were not in the original text. If the original has no period at the end, the corrected text must also have no period. If the original has no comma, do not insert one.
+Preserve the original sentence structure, word choice, and tone exactly.
+Only return the corrected text with no explanation.
+If the text has no errors, return it exactly as-is.
+Language: ${language}`;
   }
 
   const toneInstruction = TONE_INSTRUCTIONS[tone] || "";
-  return `You are a text correction and style conversion assistant.\nFirst, fix any spelling errors, typos, and grammar mistakes in the given text.\nThen, convert the corrected text to the specified tone/style.${toneInstruction}\nOnly return the final result with no explanation.\nKeep the original meaning intact.\nLanguage: ${language}`;
+  return `You are a text correction and style conversion assistant.
+First, fix any spelling errors, typos, and spacing mistakes in the given text.
+Then, convert the corrected text to the specified tone/style.${toneInstruction}
+Only return the final result with no explanation.
+Keep the original meaning intact.
+Language: ${language}`;
 };
 
 // ── Gemini (primary) ─────────────────────────────────
@@ -41,7 +50,7 @@ async function correctWithGemini(
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: "gemini-3.1-flash-lite-preview",
     generationConfig: {
       temperature: 0.1,
       maxOutputTokens: 256,
@@ -152,7 +161,7 @@ export default async function handler(req: Request): Promise<Response> {
     const body = await req.json();
     const { text, language, tone } = body;
 
-    const validTones = ["none", "formal", "casual", "business", "friendly"];
+    const validTones = ["none", "casual", "formal", "polished"];
     const safeTone = validTones.includes(tone) ? tone : "none";
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
