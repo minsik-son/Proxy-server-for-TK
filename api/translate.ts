@@ -29,7 +29,7 @@ async function translateWithGemini(
   targetLang: string
 ): Promise<string> {
   const model = getGenAI().getGenerativeModel({
-    model: "gemini-3.1-flash-lite",
+    model: "gemini-2.5-flash-lite",
     generationConfig: {
       temperature: 0.3,
       maxOutputTokens: 512,
