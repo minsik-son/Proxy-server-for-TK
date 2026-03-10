@@ -2,6 +2,16 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export const config = { runtime: "edge" };
 
+let _genAI: GoogleGenerativeAI | null = null;
+function getGenAI(): GoogleGenerativeAI {
+  if (!_genAI) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("NO_GEMINI_KEY");
+    _genAI = new GoogleGenerativeAI(apiKey);
+  }
+  return _genAI;
+}
+
 const TONE_INSTRUCTIONS: Record<string, string> = {
   casual:
     "Write in casual, informal tone (반말 in Korean). Use relaxed endings like ~해, ~야.",
@@ -14,11 +24,7 @@ const TONE_INSTRUCTIONS: Record<string, string> = {
 };
 
 const SYSTEM_PROMPT = (tone: string, language: string) =>
-  `You are a message writing assistant.
-Write a message based on the user's description.
-${TONE_INSTRUCTIONS[tone] || TONE_INSTRUCTIONS.casual}
-Output ONLY the message itself, no explanations or quotes.
-Language: ${language}`;
+  `Write a message based on the description. ${TONE_INSTRUCTIONS[tone] || TONE_INSTRUCTIONS.casual} Output message only. Language: ${language}`;
 
 const MAX_PROMPT_LENGTH = 500;
 
@@ -29,11 +35,7 @@ async function composeWithGemini(
   tone: string,
   language: string
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("NO_GEMINI_KEY");
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
+  const model = getGenAI().getGenerativeModel({
     model: "gemini-2.5-flash",
     generationConfig: {
       temperature: 0.8,

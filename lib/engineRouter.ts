@@ -2,6 +2,16 @@ import * as deepl from "deepl-node";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
+let _genAI: GoogleGenerativeAI | null = null;
+function getGenAI(): GoogleGenerativeAI {
+  if (!_genAI) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("NO_GEMINI_KEY");
+    _genAI = new GoogleGenerativeAI(apiKey);
+  }
+  return _genAI;
+}
+
 interface TranslationResult {
   translatedText: string;
   engine: "deepl" | "gpt-4o-mini" | "gemini";
@@ -104,14 +114,8 @@ async function translateWithGemini(
   sourceLang: string,
   targetLang: string
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("NO_GEMINI_KEY");
-  }
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+  const model = getGenAI().getGenerativeModel({
+    model: "gemini-2.5-flash-lite",
     generationConfig: {
       temperature: 0.3,
       maxOutputTokens: 512,

@@ -2,6 +2,16 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export const config = { runtime: "edge" };
 
+let _genAI: GoogleGenerativeAI | null = null;
+function getGenAI(): GoogleGenerativeAI {
+  if (!_genAI) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("NO_GEMINI_KEY");
+    _genAI = new GoogleGenerativeAI(apiKey);
+  }
+  return _genAI;
+}
+
 const VALID_LANGUAGES = [
   "ko", "en", "ja", "zh", "es", "fr", "de", "pt", "ru", "it",
 ];
@@ -9,7 +19,7 @@ const VALID_LANGUAGES = [
 const MAX_TEXT_LENGTH = 200;
 
 const SYSTEM_PROMPT = (sourceLang: string, targetLang: string) =>
-  `You are a professional translator. Translate the given text from ${sourceLang} to ${targetLang}. Output only the translated text without any explanations or additional text.`;
+  `Translate from ${sourceLang} to ${targetLang}. Output translation only.`;
 
 // ── Gemini (primary) ─────────────────────────────────
 
@@ -18,12 +28,8 @@ async function translateWithGemini(
   sourceLang: string,
   targetLang: string
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("NO_GEMINI_KEY");
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+  const model = getGenAI().getGenerativeModel({
+    model: "gemini-3.1-flash-lite",
     generationConfig: {
       temperature: 0.3,
       maxOutputTokens: 512,

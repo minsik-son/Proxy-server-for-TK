@@ -2,6 +2,16 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export const config = { runtime: "edge" };
 
+let _genAI: GoogleGenerativeAI | null = null;
+function getGenAI(): GoogleGenerativeAI {
+  if (!_genAI) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error("NO_GEMINI_KEY");
+    _genAI = new GoogleGenerativeAI(apiKey);
+  }
+  return _genAI;
+}
+
 const VALID_LANGUAGES = [
   "ko", "en", "ja", "zh", "es", "fr", "de", "pt", "ru", "it",
 ];
@@ -20,22 +30,11 @@ const TONE_INSTRUCTIONS: Record<string, string> = {
 
 const SYSTEM_PROMPT = (language: string, tone: string = "none") => {
   if (tone === "none" || !tone) {
-    return `You are a text correction assistant.
-Fix only spelling errors, typos, and spacing mistakes in the given text.
-CRITICAL RULE: Do NOT add any punctuation marks (commas, periods, exclamation marks, etc.) that were not in the original text. If the original has no period at the end, the corrected text must also have no period. If the original has no comma, do not insert one.
-Preserve the original sentence structure, word choice, and tone exactly.
-Only return the corrected text with no explanation.
-If the text has no errors, return it exactly as-is.
-Language: ${language}`;
+    return `Fix spelling, typos, and spacing only. Do NOT add or remove punctuation. Return corrected text only. Language: ${language}`;
   }
 
   const toneInstruction = TONE_INSTRUCTIONS[tone] || "";
-  return `You are a text correction and style conversion assistant.
-First, fix any spelling errors, typos, and spacing mistakes in the given text.
-Then, convert the corrected text to the specified tone/style.${toneInstruction}
-Only return the final result with no explanation.
-Keep the original meaning intact.
-Language: ${language}`;
+  return `Fix spelling/typos, then apply tone style.${toneInstruction} Return result only. Language: ${language}`;
 };
 
 // ── Gemini (primary) ─────────────────────────────────
@@ -45,12 +44,8 @@ async function correctWithGemini(
   language: string,
   tone: string
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("NO_GEMINI_KEY");
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-3.1-flash-lite-preview",
+  const model = getGenAI().getGenerativeModel({
+    model: "gemini-3.1-flash-lite",
     generationConfig: {
       temperature: 0.1,
       maxOutputTokens: 256,
