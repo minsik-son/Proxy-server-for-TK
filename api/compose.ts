@@ -69,12 +69,13 @@ const LANGUAGE_NAMES: Record<string, string> = {
 };
 
 const SYSTEM_PROMPT = (tone: string, language: string, length: string, replyContext?: string) => {
-  const langName = LANGUAGE_NAMES[language] || language;
+  const isAutoDetect = language === "auto";
+  const langName = isAutoDetect ? null : (LANGUAGE_NAMES[language] || language);
 
   // 톤 기본 지시
   let toneInstruction = TONE_INSTRUCTIONS[tone] || TONE_INSTRUCTIONS.casual;
 
-  // 한국어일 때만 한국어 톤 보조 힌트 추가
+  // 한국어가 명시적으로 지정된 경우에만 한국어 톤 보조 힌트 추가
   if (language === "ko" && KOREAN_TONE_HINTS[tone]) {
     toneInstruction += " " + KOREAN_TONE_HINTS[tone];
   }
@@ -84,7 +85,29 @@ const SYSTEM_PROMPT = (tone: string, language: string, length: string, replyCont
   let base = `You are a message composer. Write a message based on the user's description.\n\n`;
   base += `TONE: ${toneInstruction}\n`;
   base += `LENGTH: ${lengthInstruction}\n`;
-  base += `OUTPUT LANGUAGE: You MUST write your entire response in ${langName}. Even if the user's input is in a different language, your output MUST be in ${langName}. This is a strict requirement.\n`;
+
+  if (isAutoDetect) {
+    // ── 자동 감지 모드 (PRIMARY LANGUAGE 방식 — chat-reply 엔드포인트와 일관된 접근) ──
+    base += `OUTPUT LANGUAGE (AUTO-DETECT MODE):\n`;
+    base += `Detect the PRIMARY language of the user's input text and reply context (if provided) by analyzing the OVERALL sentence structure and grammar, NOT individual words or proper nouns.\n`;
+    base += `Write your entire response in the detected primary language.\n\n`;
+    base += `Language detection rules:\n`;
+    base += `- Analyze the grammatical structure of the input to determine the primary language.\n`;
+    base += `- Proper nouns, brand names, technical terms, or loanwords do NOT indicate language. Example: "Tesla Y 보험 갱신" is Korean despite containing English words.\n`;
+    base += `- If a reply context is provided and the user's input is very short (1-3 words) or ambiguous, prioritize the reply context's language.\n`;
+    base += `- If no reply context and the input is ambiguous, default to English.\n`;
+    base += `- NEVER mix languages in your response. Write entirely in one detected language.\n\n`;
+    base += `Supported languages for detection: Korean, English, Japanese, Simplified Chinese, Traditional Chinese, Vietnamese, Thai, Indonesian, Spanish, French, German, Portuguese, Russian, Italian.\n\n`;
+
+    // 자동 감지 시 한국어로 감지되면 톤 힌트 적용 지시
+    if (KOREAN_TONE_HINTS[tone]) {
+      base += `Special rule: If the detected language is Korean, apply these additional tone rules: ${KOREAN_TONE_HINTS[tone]}\n\n`;
+    }
+  } else {
+    // ── 명시적 언어 지정 모드: 기존 강제 지시 유지 ──
+    base += `OUTPUT LANGUAGE: You MUST write your entire response in ${langName}. Even if the user's input is in a different language, your output MUST be in ${langName}. This is a strict requirement.\n`;
+  }
+
   base += `Output the composed message only — no explanations, no labels, no quotes.`;
 
   if (replyContext) {
@@ -239,7 +262,8 @@ export default async function handler(req: Request): Promise<Response> {
       "enthusiastic", "apologetic", "social", "professional"
     ];
     const safeTone = validTones.includes(tone) ? tone : "casual";
-    const safeLang = language || "ko";
+    const validLanguages = ["auto", "ko", "en", "ja", "zh-CN", "zh-TW", "vi", "th", "es", "fr", "de", "pt", "id", "ru"];
+    const safeLang = validLanguages.includes(language) ? language : "auto";
 
     const validLengths = ["short", "medium", "long"];
     const safeLength = validLengths.includes(length) ? length : "medium";
