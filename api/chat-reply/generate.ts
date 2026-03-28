@@ -77,9 +77,9 @@ const TONE_ALIAS_MAP: Record<string, string> = {
 
 // ── Reply Style Variations ──────────────────────────
 const STYLE_VARIATIONS: string[] = [
-  "STYLE: Write a SHORT and DIRECT reply. Get straight to the point in 1-2 sentences. Be concise — no filler words, no over-explanation. Prioritize clarity and brevity.",
-  "STYLE: Write a WARM and DETAILED reply. Use 2-4 sentences with thoughtful elaboration. Show that you've fully understood the message. Add a personal touch or follow-up thought.",
-  "STYLE: Write a CREATIVE and UNIQUE reply. Take an unexpected angle or use a fresh expression. Be memorable — try a different perspective, a light metaphor, or a clever observation. Keep it natural, not forced. IMPORTANT: Creativity applies ONLY to content and expression. You MUST still reply in the SAME language as the original message. Do NOT switch languages for creative effect.",
+  "STYLE: Write a SHORT and DIRECT reply. Get straight to the point in 1-2 sentences. Be concise — no filler words, no over-explanation. Prioritize clarity and brevity. CRITICAL: Only use information explicitly stated in the original message.",
+  "STYLE: Write a WARM and DETAILED reply. Use 2-4 sentences with thoughtful elaboration. Show that you've fully understood the message. Show warmth through tone and word choice, NOT by adding fabricated details about your own situation. For example, say 'Take your time, no rush at all!' instead of 'I just finished getting ready anyway'. CRITICAL: Only reference facts from the original message. Do NOT invent details about the sender's situation, feelings, or circumstances.",
+  "STYLE: Write a CREATIVE and UNIQUE reply. Take an unexpected angle or use a fresh expression. Be memorable — try a different perspective, a light metaphor, or a clever observation. Keep it natural, not forced. IMPORTANT: Creativity applies ONLY to content and expression. You MUST still reply in the SAME language as the original message. Do NOT switch languages for creative effect. You MUST NOT invent facts about the sender.",
 ];
 
 // ── System Prompt ───────────────────────────────────
@@ -119,6 +119,23 @@ const SYSTEM_PROMPT = (tone: string, styleVariation: string, direction?: string)
   base += `- Japanese + "casual": Use タメ口 (informal speech)\n`;
   base += `- Japanese + "formal": Use 敬語 (polite/honorific speech)\n`;
   base += `- For all other languages: Apply the tone naturally using that language's conventions\n\n`;
+
+  base += `NO FABRICATION (STRICTLY ENFORCED — applies to ALL styles):\n`;
+  base += `- You can ONLY reference information that is EXPLICITLY stated or directly inferable from the original message.\n`;
+  base += `- NEVER invent facts about the sender's situation, feelings, activities, schedule, or circumstances.\n`;
+  base += `- NEVER claim or assume:\n`;
+  base += `  * What the sender is currently doing (e.g., "I'm getting ready too" when they only said "I'll leave late")\n`;
+  base += `  * The sender's emotional state beyond what is stated\n`;
+  base += `  * The sender's schedule, plans, or preferences unless explicitly mentioned\n`;
+  base += `- ALLOWED: General wisdom, sayings, or cultural references that don't claim specific knowledge about the sender.\n`;
+  base += `- FORBIDDEN vs ALLOWED examples:\n`;
+  base += `  [English] "No worries, take your time!" ← OK (generic acknowledgment)\n`;
+  base += `  [English] "I just finished getting ready too!" ← FORBIDDEN (fabricated fact)\n`;
+  base += `  [English] "Good things are worth the wait!" ← OK (general saying)\n`;
+  base += `  [Korean] "네, 괜찮아요!" ← OK (generic acknowledgment)\n`;
+  base += `  [Korean] "저도 방금 준비 마쳤어요" ← FORBIDDEN (fabricated fact about sender)\n`;
+  base += `  [Korean] "좋은 건 늦게 찾아오는 법이죠" ← OK (general saying)\n`;
+  base += `- If you cannot make a meaningful reply using only given information, keep it generic and acknowledgment-based.\n\n`;
 
   // 답장 생성 지시
   base += `REPLY GENERATION:\n`;
