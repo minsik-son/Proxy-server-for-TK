@@ -14,7 +14,6 @@ function getGenAI(): GoogleGenerativeAI {
 }
 
 // ── Tone Instructions ───────────────────────────────
-// compose.ts와 동일한 톤 맵 사용
 const TONE_INSTRUCTIONS: Record<string, string> = {
   casual:
     "Write in casual, informal tone. Use relaxed, conversational language.",
@@ -42,50 +41,48 @@ const TONE_INSTRUCTIONS: Record<string, string> = {
     "Write with competence and strategic authority. Imply expertise and thought leadership. Distinct from formal — focus on substance over politeness.",
 };
 
-const KOREAN_TONE_HINTS: Record<string, string> = {
-  casual: "Use 반말 (informal Korean speech). Use relaxed endings like ~해, ~야.",
-  formal: "Use 존댓말 (polite Korean speech). Use 해요체 or 합니다체.",
-  empathetic: "Maintain appropriate Korean emotional register.",
-};
-
-const LANGUAGE_NAMES: Record<string, string> = {
-  ko: "Korean",
-  en: "English",
-  ja: "Japanese",
-  "zh-CN": "Simplified Chinese",
-  "zh-TW": "Traditional Chinese",
-  vi: "Vietnamese",
-  th: "Thai",
-  es: "Spanish",
-  fr: "French",
-  de: "German",
-  pt: "Portuguese",
-  id: "Indonesian",
-  ru: "Russian",
-};
+// ── Reply Style Variations ──────────────────────────
+// 3개 답장이 각각 다른 스타일을 가지도록 하는 variation 지시
+const STYLE_VARIATIONS: string[] = [
+  "STYLE: Write a SHORT and DIRECT reply. Get straight to the point in 1-2 sentences. Be concise — no filler words, no over-explanation. Prioritize clarity and brevity.",
+  "STYLE: Write a WARM and DETAILED reply. Use 2-4 sentences with thoughtful elaboration. Show that you've fully understood the message. Add a personal touch or follow-up thought.",
+  "STYLE: Write a CREATIVE and UNIQUE reply. Take an unexpected angle or use a fresh expression. Be memorable — try a different perspective, a light metaphor, or a clever observation. Keep it natural, not forced.",
+];
 
 // ── System Prompt ───────────────────────────────────
-// chat-reply 전용: context(원본 메시지)에 대한 답장 생성에 최적화
-const SYSTEM_PROMPT = (tone: string, language: string, context: string, direction?: string) => {
-  const langName = LANGUAGE_NAMES[language] || language;
-
+// v2: 언어 자동 감지 + 스타일 variation
+const SYSTEM_PROMPT = (tone: string, context: string, styleVariation: string, direction?: string) => {
   let toneInstruction = TONE_INSTRUCTIONS[tone] || TONE_INSTRUCTIONS.casual;
 
-  if (language === "ko" && KOREAN_TONE_HINTS[tone]) {
-    toneInstruction += " " + KOREAN_TONE_HINTS[tone];
-  }
+  let base = `You are a chat reply assistant. Your task has TWO phases:\n\n`;
 
-  let base = `You are a chat reply assistant. Generate a natural reply to the given message.\n\n`;
+  // Phase 1: 언어 감지
+  base += `PHASE 1 — LANGUAGE DETECTION:\n`;
+  base += `First, detect the language of the ORIGINAL MESSAGE below. `;
+  base += `Your reply MUST be written in the SAME language as the original message. `;
+  base += `For example: if the message is in Korean, reply in Korean. If in English, reply in English. If in Japanese, reply in Japanese. `;
+  base += `This is a strict requirement — NEVER reply in a different language than the original message.\n\n`;
+
+  // Phase 1 보조: 한국어 톤 힌트
+  base += `LANGUAGE-SPECIFIC RULES:\n`;
+  base += `- If the message is in Korean and tone is "casual": Use 반말 (informal speech like ~해, ~야, ~거든)\n`;
+  base += `- If the message is in Korean and tone is "formal": Use 존댓말 (polite speech like 해요체 or 합니다체)\n`;
+  base += `- If the message is in Korean and tone is "empathetic": Maintain appropriate Korean emotional register\n`;
+  base += `- If the message is in Japanese and tone is "casual": Use タメ口 (informal speech)\n`;
+  base += `- If the message is in Japanese and tone is "formal": Use 敬語 (polite/honorific speech)\n`;
+  base += `- For all other languages: Apply the tone naturally using that language's conventions\n\n`;
+
+  // Phase 2: 답장 생성
+  base += `PHASE 2 — REPLY GENERATION:\n`;
   base += `ORIGINAL MESSAGE TO REPLY TO: "${context}"\n`;
   base += `TONE: ${toneInstruction}\n`;
-  base += `LENGTH: Keep the reply to 1-3 sentences. Be concise and natural.\n`;
-  base += `OUTPUT LANGUAGE: You MUST write your entire response in ${langName}. Even if the original message is in a different language, your output MUST be in ${langName}. This is a strict requirement.\n`;
+  base += `${styleVariation}\n`;
 
   if (direction && direction.trim().length > 0) {
-    base += `USER DIRECTION: The user wants the reply to: ${direction}\n`;
+    base += `USER DIRECTION: The user wants the reply to incorporate: ${direction}\n`;
   }
 
-  base += `Output the reply message only — no explanations, no labels, no quotes.`;
+  base += `\nOutput the reply message only — no explanations, no labels, no quotes, no language tags.`;
 
   return base;
 };
@@ -94,24 +91,24 @@ const SYSTEM_PROMPT = (tone: string, language: string, context: string, directio
 async function generateReplyWithGemini(
   context: string,
   tone: string,
-  language: string,
+  styleVariation: string,
   direction?: string
 ): Promise<string> {
   const model = getGenAI().getGenerativeModel({
     model: "gemini-2.5-flash",
     generationConfig: {
-      temperature: 0.8,
+      temperature: 0.9,
       maxOutputTokens: 512,
       // @ts-ignore
       thinkingConfig: { thinkingBudget: 0 },
     } as any,
   });
 
-  const prompt = direction && direction.trim().length > 0
+  const userPrompt = direction && direction.trim().length > 0
     ? `Write a reply based on these instructions: ${direction}`
     : `Write a natural, appropriate reply to the message above.`;
 
-  const fullPrompt = `${SYSTEM_PROMPT(tone, language, context, direction)}\n\n${prompt}`;
+  const fullPrompt = `${SYSTEM_PROMPT(tone, context, styleVariation, direction)}\n\n${userPrompt}`;
   const result = await model.generateContent(fullPrompt);
   const message = result.response.text().trim();
 
@@ -123,7 +120,7 @@ async function generateReplyWithGemini(
 async function generateReplyWithOpenAI(
   context: string,
   tone: string,
-  language: string,
+  styleVariation: string,
   direction?: string
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -142,10 +139,10 @@ async function generateReplyWithOpenAI(
     body: JSON.stringify({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: SYSTEM_PROMPT(tone, language, context, direction) },
+        { role: "system", content: SYSTEM_PROMPT(tone, context, styleVariation, direction) },
         { role: "user", content: userPrompt },
       ],
-      temperature: 0.8,
+      temperature: 0.9,
       max_tokens: 512,
     }),
   });
@@ -160,7 +157,7 @@ async function generateReplyWithOpenAI(
 async function generateReply(
   context: string,
   tone: string,
-  language: string,
+  styleVariation: string,
   direction?: string
 ): Promise<string> {
   const hasGemini = !!process.env.GEMINI_API_KEY;
@@ -172,17 +169,17 @@ async function generateReply(
 
   if (hasGemini) {
     try {
-      return await generateReplyWithGemini(context, tone, language, direction);
+      return await generateReplyWithGemini(context, tone, styleVariation, direction);
     } catch (e) {
       console.warn("Gemini failed:", e);
       if (hasOpenAI) {
-        return await generateReplyWithOpenAI(context, tone, language, direction);
+        return await generateReplyWithOpenAI(context, tone, styleVariation, direction);
       }
       throw e;
     }
   }
 
-  return await generateReplyWithOpenAI(context, tone, language, direction);
+  return await generateReplyWithOpenAI(context, tone, styleVariation, direction);
 }
 
 // ── Validation Constants ────────────────────────────
@@ -221,7 +218,7 @@ export default async function handler(req: Request): Promise<Response> {
     const body = await req.json();
 
     // 앱이 보내는 필드: context, tone, direction, language, count, deviceId
-    const { context, tone, direction, language, count } = body;
+    const { context, tone, direction, count } = body;
 
     // ── Validation ────────────────────────────────
     if (!context || typeof context !== "string" || context.trim().length === 0) {
@@ -239,39 +236,32 @@ export default async function handler(req: Request): Promise<Response> {
     }
 
     const safeTone = VALID_TONES.includes(tone) ? tone : "casual";
-    const safeLang = language || "en";
     const safeDirection = typeof direction === "string" && direction.trim().length > 0
       ? direction.trim().slice(0, MAX_DIRECTION_LENGTH)
       : undefined;
     const safeCount = Math.min(Math.max(parseInt(count) || 3, 1), 3);
 
-    // ── Generate replies ──────────────────────────
-    if (safeCount > 1) {
-      const promises = Array.from({ length: safeCount }, () =>
-        generateReply(context.trim(), safeTone, safeLang, safeDirection)
+    // ── Generate replies with DIFFERENT style variations ──
+    // 각 답장마다 다른 STYLE_VARIATIONS를 적용하여 다양한 답장 생성
+    const promises = Array.from({ length: safeCount }, (_, index) => {
+      const styleVariation = STYLE_VARIATIONS[index % STYLE_VARIATIONS.length];
+      return generateReply(context.trim(), safeTone, styleVariation, safeDirection);
+    });
+
+    const settled = await Promise.allSettled(promises);
+    const fulfilled = settled
+      .filter((r): r is PromiseFulfilledResult<string> => r.status === "fulfilled")
+      .map(r => r.value);
+
+    if (fulfilled.length === 0) {
+      return Response.json(
+        { error: "All generation attempts failed" },
+        { status: 500, headers }
       );
-      const settled = await Promise.allSettled(promises);
-      const fulfilled = settled
-        .filter((r): r is PromiseFulfilledResult<string> => r.status === "fulfilled")
-        .map(r => r.value);
-
-      if (fulfilled.length === 0) {
-        return Response.json(
-          { error: "All generation attempts failed" },
-          { status: 500, headers }
-        );
-      }
-
-      // 앱이 기대하는 응답 형식: { replies: [String] }
-      return Response.json({ replies: fulfilled }, { headers });
     }
 
-    // Single result
-    const reply = await generateReply(
-      context.trim(), safeTone, safeLang, safeDirection
-    );
-
-    return Response.json({ replies: [reply] }, { headers });
+    // 앱이 기대하는 응답 형식: { replies: [String] }
+    return Response.json({ replies: fulfilled }, { headers });
   } catch (error) {
     console.error("Chat reply generation error:", error);
     return Response.json(
