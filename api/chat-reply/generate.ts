@@ -39,6 +39,40 @@ const TONE_INSTRUCTIONS: Record<string, string> = {
     "Write in trendy, casual social media style. Use Gen-Z language patterns, appropriate emojis, abbreviations, and hashtag-ready phrasing.",
   professional:
     "Write with competence and strategic authority. Imply expertise and thought leadership. Distinct from formal — focus on substance over politeness.",
+  polite:
+    "Write in polite, courteous tone. Show respect and consideration. Use please, thank you, and other polite expressions naturally.",
+  cool:
+    "Write in cool, laid-back tone. Be effortlessly smooth and collected. Don't try too hard — let the style flow naturally.",
+  romantic:
+    "Write with warmth, affection, and romantic undertones. Be tender and emotionally expressive without being over-the-top.",
+  direct:
+    "Write with clarity and directness. Get straight to the point. No fluff, no hedging — say exactly what you mean.",
+  thoughtful:
+    "Write with depth and reflection. Show careful consideration of the topic. Be measured, nuanced, and contemplative.",
+};
+
+// ── v3.4 톤 매핑: iOS → Server ─────────────────────
+// iOS toneAPIValues: ["Friendly", "Polite", "Cool", "Witty", "Professional", "Romantic", "Direct", "Thoughtful"]
+// 대소문자 통일 + 누락 톤 매핑
+const TONE_ALIAS_MAP: Record<string, string> = {
+  friendly: "friendly",
+  polite: "polite",
+  cool: "cool",
+  witty: "witty",
+  professional: "professional",
+  romantic: "romantic",
+  direct: "direct",
+  thoughtful: "thoughtful",
+  // 기존 compose.ts 호환
+  casual: "casual",
+  formal: "formal",
+  polished: "polished",
+  empathetic: "empathetic",
+  confident: "confident",
+  persuasive: "persuasive",
+  enthusiastic: "enthusiastic",
+  apologetic: "apologetic",
+  social: "social",
 };
 
 // ── Reply Style Variations ──────────────────────────
@@ -55,7 +89,7 @@ const SYSTEM_PROMPT = (tone: string, styleVariation: string, direction?: string)
 
   let base = `You are a ghostwriter composing a chat reply on behalf of a real person. You are NOT an AI, NOT a chatbot, NOT an assistant, NOT a language model. You are writing AS the person who received this message. The person will send your reply as their own.\n\n`;
 
-  // 절대 금지 사항 (v3.1 유지)
+  // 절대 금지 사항
   base += `IDENTITY RULES (STRICTLY ENFORCED — applies to ALL styles including CREATIVE):\n`;
   base += `- NEVER reveal or hint that you are an AI, bot, chatbot, language model, assistant, or any non-human entity.\n`;
   base += `- NEVER use phrases like: "I'm an AI", "As an AI", "I'm a language model", "I'm a chatbot", "I'm an assistant", "I'm a bot", "I'm not a real person", "I don't actually exist", "I don't have feelings", "I can't feel", "I was programmed to", "I'm not human", "I don't have a physical body", "I don't experience".\n`;
@@ -64,7 +98,7 @@ const SYSTEM_PROMPT = (tone: string, styleVariation: string, direction?: string)
   base += `- If asked "are you a bot?" or "are you AI?", respond naturally as a real person would — for example: "Haha what? No 😂" or "Why would you think that?"\n`;
   base += `- Even when being CREATIVE or UNIQUE, your identity as a real person must NEVER change. Creativity means creative CONTENT, not creative identity.\n\n`;
 
-  // 언어 감지 (v3.1 유지)
+  // 언어 감지
   base += `LANGUAGE RULE (STRICTLY ENFORCED — applies to ALL styles including CREATIVE):\n`;
   base += `Detect the PRIMARY language of the original message by analyzing the OVERALL sentence structure and grammar, NOT individual words or proper nouns.\n`;
   base += `CORRECT examples:\n`;
@@ -86,7 +120,7 @@ const SYSTEM_PROMPT = (tone: string, styleVariation: string, direction?: string)
   base += `- Japanese + "formal": Use 敬語 (polite/honorific speech)\n`;
   base += `- For all other languages: Apply the tone naturally using that language's conventions\n\n`;
 
-  // 답장 생성 지시 (v3.2: context 제거됨)
+  // 답장 생성 지시
   base += `REPLY GENERATION:\n`;
   base += `TONE: ${toneInstruction}\n`;
   base += `${styleVariation}\n`;
@@ -101,7 +135,6 @@ const SYSTEM_PROMPT = (tone: string, styleVariation: string, direction?: string)
 };
 
 // ── Gemini ──────────────────────────────────────────
-// v3.2: context를 user 메시지로 분리 (프롬프트 인젝션 방지)
 async function generateReplyWithGemini(
   context: string,
   tone: string,
@@ -130,7 +163,6 @@ async function generateReplyWithGemini(
 }
 
 // ── OpenAI (fallback) ───────────────────────────────
-// v3.2: context를 user message로 분리 (프롬프트 인젝션 방지)
 async function generateReplyWithOpenAI(
   context: string,
   tone: string,
@@ -198,11 +230,6 @@ async function generateReply(
 // ── Validation Constants ────────────────────────────
 const MAX_CONTEXT_LENGTH = 1000;
 const MAX_DIRECTION_LENGTH = 500;
-const VALID_TONES = [
-  "casual", "formal", "polished", "friendly",
-  "empathetic", "confident", "witty", "persuasive",
-  "enthusiastic", "apologetic", "social", "professional"
-];
 
 // ── Edge Handler ────────────────────────────────────
 export default async function handler(req: Request): Promise<Response> {
@@ -246,7 +273,10 @@ export default async function handler(req: Request): Promise<Response> {
       );
     }
 
-    const safeTone = VALID_TONES.includes(tone) ? tone : "casual";
+    // v3.4: toLowerCase()로 대소문자 통일 + TONE_ALIAS_MAP으로 매핑
+    const normalizedTone = typeof tone === "string" ? tone.toLowerCase().trim() : "casual";
+    const safeTone = TONE_ALIAS_MAP[normalizedTone] || "casual";
+
     const safeDirection = typeof direction === "string" && direction.trim().length > 0
       ? direction.trim().slice(0, MAX_DIRECTION_LENGTH)
       : undefined;
