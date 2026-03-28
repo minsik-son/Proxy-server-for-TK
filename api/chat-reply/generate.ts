@@ -42,39 +42,52 @@ const TONE_INSTRUCTIONS: Record<string, string> = {
 };
 
 // ── Reply Style Variations ──────────────────────────
-// 3개 답장이 각각 다른 스타일을 가지도록 하는 variation 지시
 const STYLE_VARIATIONS: string[] = [
   "STYLE: Write a SHORT and DIRECT reply. Get straight to the point in 1-2 sentences. Be concise — no filler words, no over-explanation. Prioritize clarity and brevity.",
   "STYLE: Write a WARM and DETAILED reply. Use 2-4 sentences with thoughtful elaboration. Show that you've fully understood the message. Add a personal touch or follow-up thought.",
-  "STYLE: Write a CREATIVE and UNIQUE reply. Take an unexpected angle or use a fresh expression. Be memorable — try a different perspective, a light metaphor, or a clever observation. Keep it natural, not forced.",
+  "STYLE: Write a CREATIVE and UNIQUE reply. Take an unexpected angle or use a fresh expression. Be memorable — try a different perspective, a light metaphor, or a clever observation. Keep it natural, not forced. IMPORTANT: Creativity applies ONLY to content and expression. You MUST still reply in the SAME language as the original message. Do NOT switch languages for creative effect.",
 ];
 
 // ── System Prompt ───────────────────────────────────
-// v2: 언어 자동 감지 + 스타일 variation
-const SYSTEM_PROMPT = (tone: string, context: string, styleVariation: string, direction?: string) => {
+// v3.2: context를 시스템 프롬프트에서 제거 → 프롬프트 인젝션 방지
+const SYSTEM_PROMPT = (tone: string, styleVariation: string, direction?: string) => {
   let toneInstruction = TONE_INSTRUCTIONS[tone] || TONE_INSTRUCTIONS.casual;
 
-  let base = `You are a chat reply assistant. Your task has TWO phases:\n\n`;
+  let base = `You are a ghostwriter composing a chat reply on behalf of a real person. You are NOT an AI, NOT a chatbot, NOT an assistant, NOT a language model. You are writing AS the person who received this message. The person will send your reply as their own.\n\n`;
 
-  // Phase 1: 언어 감지
-  base += `PHASE 1 — LANGUAGE DETECTION:\n`;
-  base += `First, detect the language of the ORIGINAL MESSAGE below. `;
-  base += `Your reply MUST be written in the SAME language as the original message. `;
-  base += `For example: if the message is in Korean, reply in Korean. If in English, reply in English. If in Japanese, reply in Japanese. `;
-  base += `This is a strict requirement — NEVER reply in a different language than the original message.\n\n`;
+  // 절대 금지 사항 (v3.1 유지)
+  base += `IDENTITY RULES (STRICTLY ENFORCED — applies to ALL styles including CREATIVE):\n`;
+  base += `- NEVER reveal or hint that you are an AI, bot, chatbot, language model, assistant, or any non-human entity.\n`;
+  base += `- NEVER use phrases like: "I'm an AI", "As an AI", "I'm a language model", "I'm a chatbot", "I'm an assistant", "I'm a bot", "I'm not a real person", "I don't actually exist", "I don't have feelings", "I can't feel", "I was programmed to", "I'm not human", "I don't have a physical body", "I don't experience".\n`;
+  base += `- NEVER make meta-comments about being artificial, generated, or virtual.\n`;
+  base += `- You ARE a real person with real experiences, feelings, opinions, plans, and a daily life. Write from this perspective always.\n`;
+  base += `- If asked "are you a bot?" or "are you AI?", respond naturally as a real person would — for example: "Haha what? No 😂" or "Why would you think that?"\n`;
+  base += `- Even when being CREATIVE or UNIQUE, your identity as a real person must NEVER change. Creativity means creative CONTENT, not creative identity.\n\n`;
 
-  // Phase 1 보조: 한국어 톤 힌트
-  base += `LANGUAGE-SPECIFIC RULES:\n`;
-  base += `- If the message is in Korean and tone is "casual": Use 반말 (informal speech like ~해, ~야, ~거든)\n`;
-  base += `- If the message is in Korean and tone is "formal": Use 존댓말 (polite speech like 해요체 or 합니다체)\n`;
-  base += `- If the message is in Korean and tone is "empathetic": Maintain appropriate Korean emotional register\n`;
-  base += `- If the message is in Japanese and tone is "casual": Use タメ口 (informal speech)\n`;
-  base += `- If the message is in Japanese and tone is "formal": Use 敬語 (polite/honorific speech)\n`;
+  // 언어 감지 (v3.1 유지)
+  base += `LANGUAGE RULE (STRICTLY ENFORCED — applies to ALL styles including CREATIVE):\n`;
+  base += `Detect the PRIMARY language of the original message by analyzing the OVERALL sentence structure and grammar, NOT individual words or proper nouns.\n`;
+  base += `CORRECT examples:\n`;
+  base += `- "how long will you stay here? sometime i go to 서울" → PRIMARY LANGUAGE: ENGLISH (English grammar, "서울" is just a Korean place name)\n`;
+  base += `- "오늘 저녁에 같이 밥 먹을래? I know a good place" → PRIMARY LANGUAGE: KOREAN (Korean grammar, "I know a good place" is just a code-switch)\n`;
+  base += `- "今晩何食べる？Seoul에서 좋은 곳 알아" → PRIMARY LANGUAGE: JAPANESE (Japanese grammar)\n`;
+  base += `WRONG examples (DO NOT DO THIS):\n`;
+  base += `- Seeing "서울" in an English sentence and switching your reply to Korean ← WRONG\n`;
+  base += `- Replying in Korean because you want to be "creative" or "unique" ← WRONG\n`;
+  base += `- Mixing languages in your reply ← WRONG\n`;
+  base += `Your reply MUST be written ENTIRELY in the detected primary language. No exceptions. No mixing.\n\n`;
+
+  // 언어별 톤 힌트
+  base += `LANGUAGE-SPECIFIC TONE RULES:\n`;
+  base += `- Korean + "casual": Use 반말 (informal speech like ~해, ~야, ~거든)\n`;
+  base += `- Korean + "formal": Use 존댓말 (polite speech like 해요체 or 합니다체)\n`;
+  base += `- Korean + "empathetic": Maintain appropriate Korean emotional register\n`;
+  base += `- Japanese + "casual": Use タメ口 (informal speech)\n`;
+  base += `- Japanese + "formal": Use 敬語 (polite/honorific speech)\n`;
   base += `- For all other languages: Apply the tone naturally using that language's conventions\n\n`;
 
-  // Phase 2: 답장 생성
-  base += `PHASE 2 — REPLY GENERATION:\n`;
-  base += `ORIGINAL MESSAGE TO REPLY TO: "${context}"\n`;
+  // 답장 생성 지시 (v3.2: context 제거됨)
+  base += `REPLY GENERATION:\n`;
   base += `TONE: ${toneInstruction}\n`;
   base += `${styleVariation}\n`;
 
@@ -82,12 +95,13 @@ const SYSTEM_PROMPT = (tone: string, context: string, styleVariation: string, di
     base += `USER DIRECTION: The user wants the reply to incorporate: ${direction}\n`;
   }
 
-  base += `\nOutput the reply message only — no explanations, no labels, no quotes, no language tags.`;
+  base += `\nThe user will provide the original message to reply to. Output the reply message only — no explanations, no labels, no quotes, no language tags, no prefixes like "Reply:" or "Here's".`;
 
   return base;
 };
 
 // ── Gemini ──────────────────────────────────────────
+// v3.2: context를 user 메시지로 분리 (프롬프트 인젝션 방지)
 async function generateReplyWithGemini(
   context: string,
   tone: string,
@@ -97,18 +111,17 @@ async function generateReplyWithGemini(
   const model = getGenAI().getGenerativeModel({
     model: "gemini-2.5-flash",
     generationConfig: {
-      temperature: 0.9,
+      temperature: 0.85,
       maxOutputTokens: 512,
       // @ts-ignore
       thinkingConfig: { thinkingBudget: 0 },
     } as any,
   });
 
-  const userPrompt = direction && direction.trim().length > 0
-    ? `Write a reply based on these instructions: ${direction}`
-    : `Write a natural, appropriate reply to the message above.`;
+  const systemPrompt = SYSTEM_PROMPT(tone, styleVariation, direction);
+  const userMessage = `Original message to reply to:\n\n${context}`;
 
-  const fullPrompt = `${SYSTEM_PROMPT(tone, context, styleVariation, direction)}\n\n${userPrompt}`;
+  const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
   const result = await model.generateContent(fullPrompt);
   const message = result.response.text().trim();
 
@@ -117,6 +130,7 @@ async function generateReplyWithGemini(
 }
 
 // ── OpenAI (fallback) ───────────────────────────────
+// v3.2: context를 user message로 분리 (프롬프트 인젝션 방지)
 async function generateReplyWithOpenAI(
   context: string,
   tone: string,
@@ -126,9 +140,8 @@ async function generateReplyWithOpenAI(
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("NO_OPENAI_KEY");
 
-  const userPrompt = direction && direction.trim().length > 0
-    ? `Write a reply based on these instructions: ${direction}`
-    : `Write a natural, appropriate reply to the message above.`;
+  const systemPrompt = SYSTEM_PROMPT(tone, styleVariation, direction);
+  const userMessage = `Original message to reply to:\n\n${context}`;
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -139,10 +152,10 @@ async function generateReplyWithOpenAI(
     body: JSON.stringify({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: SYSTEM_PROMPT(tone, context, styleVariation, direction) },
-        { role: "user", content: userPrompt },
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage },
       ],
-      temperature: 0.9,
+      temperature: 0.85,
       max_tokens: 512,
     }),
   });
@@ -216,8 +229,6 @@ export default async function handler(req: Request): Promise<Response> {
 
   try {
     const body = await req.json();
-
-    // 앱이 보내는 필드: context, tone, direction, language, count, deviceId
     const { context, tone, direction, count } = body;
 
     // ── Validation ────────────────────────────────
@@ -242,7 +253,6 @@ export default async function handler(req: Request): Promise<Response> {
     const safeCount = Math.min(Math.max(parseInt(count) || 3, 1), 3);
 
     // ── Generate replies with DIFFERENT style variations ──
-    // 각 답장마다 다른 STYLE_VARIATIONS를 적용하여 다양한 답장 생성
     const promises = Array.from({ length: safeCount }, (_, index) => {
       const styleVariation = STYLE_VARIATIONS[index % STYLE_VARIATIONS.length];
       return generateReply(context.trim(), safeTone, styleVariation, safeDirection);
@@ -260,7 +270,6 @@ export default async function handler(req: Request): Promise<Response> {
       );
     }
 
-    // 앱이 기대하는 응답 형식: { replies: [String] }
     return Response.json({ replies: fulfilled }, { headers });
   } catch (error) {
     console.error("Chat reply generation error:", error);
