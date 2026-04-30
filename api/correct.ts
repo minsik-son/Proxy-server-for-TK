@@ -2,6 +2,19 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export const config = { runtime: "edge" };
 
+const OPENAI_MODEL = "gpt-5-nano";
+const GEMINI_MODEL = "gemini-2.5-flash-lite";
+
+function getOpenAIKey(): string {
+  const apiKey = process.env.OpenAI_5_Nano || process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("NO_OPENAI_KEY");
+  return apiKey;
+}
+
+function hasOpenAIKey(): boolean {
+  return !!(process.env.OpenAI_5_Nano || process.env.OPENAI_API_KEY);
+}
+
 let _genAI: GoogleGenerativeAI | null = null;
 function getGenAI(): GoogleGenerativeAI {
   if (!_genAI) {
@@ -12,198 +25,146 @@ function getGenAI(): GoogleGenerativeAI {
   return _genAI;
 }
 
-const VALID_LANGUAGES = [
-  "ko", "en", "ja", "zh", "es", "fr", "de", "pt", "ru", "it",
-];
-
+const VALID_LANGUAGES = ["ko","en","ja","zh","es","fr","de","pt","ru","it"];
 const MAX_TEXT_LENGTH = 200;
 
-const TONE_INSTRUCTIONS: Record<string, string> = {
-  none: "",
-  casual:
-    "\nConvert the text to casual/informal language (반말 in Korean). Use informal endings and relaxed tone (~해, ~야, ~거든). Do NOT add punctuation (commas, periods) that was not in the original text.",
-  formal:
-    "\nConvert the text to polite/formal language (존댓말 in Korean). Use 해요체 by default (~해요, ~이에요, ~하세요). If the context is clearly professional/business, use 합니다체 (~합니다, ~입니다). Do NOT add punctuation that was not in the original text.",
-  polished:
-    "\nKeep the original tone (반말/존댓말) exactly as-is, but properly insert all necessary punctuation marks: commas, periods, exclamation marks, question marks, etc. Ensure perfect spacing and clean sentence structure. This is a 'polished writing' mode — fix formatting and punctuation, not tone.",
-};
+const SYSTEM_PROMPT = (language: string) =>
+  `Fix spelling, typos, and spacing only. Do NOT add or remove punctuation. Return corrected text only. Language: ${language}`;
 
-const SYSTEM_PROMPT = (language: string, tone: string = "none") => {
-  if (tone === "none" || !tone) {
-    return `Fix spelling, typos, and spacing only. Do NOT add or remove punctuation. Return corrected text only. Language: ${language}`;
-  }
+// ── OpenAI GPT-5 Nano (primary) via Responses API ──
 
-  const toneInstruction = TONE_INSTRUCTIONS[tone] || "";
-  return `Fix spelling/typos, then apply tone style.${toneInstruction} Return result only. Language: ${language}`;
-};
-
-// ── Gemini (primary) ─────────────────────────────────
-
-async function correctWithGemini(
-  text: string,
-  language: string,
-  tone: string
-): Promise<string> {
-  const model = getGenAI().getGenerativeModel({
-    model: "gemini-2.5-flash-lite",
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 256,
-      // @ts-ignore
-      thinkingConfig: { thinkingBudget: 0 },
-    } as any,
-  });
-
-  const prompt = `${SYSTEM_PROMPT(language, tone)}\n\nText: ${text}`;
-  const result = await model.generateContent(prompt);
-  const corrected = result.response.text().trim();
-
-  if (!corrected) throw new Error("Empty response from Gemini");
-  return corrected;
-}
-
-// ── OpenAI (fallback) ────────────────────────────────
-
-async function correctWithOpenAI(
-  text: string,
-  language: string,
-  tone: string
-): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("NO_OPENAI_KEY");
-
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+async function correctWithOpenAI(text: string, language: string): Promise<string> {
+  const apiKey = getOpenAIKey();
+  const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT(language, tone) },
-        { role: "user", content: text },
-      ],
-      temperature: 0.1,
-      max_tokens: 500,
+      model: OPENAI_MODEL,
+      instructions: SYSTEM_PROMPT(language),
+      input: text,
+      reasoning: { effort: "minimal" },
+      text: { verbosity: "low" },
+      max_output_tokens: 256,
     }),
   });
 
+  if (!res.ok) {
+    const status = res.status;
+    throw new Error(`OpenAI HTTP ${status}`);
+  }
+
   const data = await res.json();
-  const result = data.choices?.[0]?.message?.content?.trim();
+  const result = typeof data.output_text === "string" && data.output_text.trim()
+    ? data.output_text.trim()
+    : extractTextFromOutput(data.output);
+
   if (!result) throw new Error("Empty response from OpenAI");
   return result;
 }
 
-// ── Provider selection with fallback ─────────────────
-
-interface CorrectionResult {
-  correctedText: string;
-  engine: string;
-  actualProvider: string;
-  actualModel: string;
-  usedFallback: boolean;
-  providerMs: number;
-  fallbackMs: number;
+function extractTextFromOutput(output: unknown): string {
+  if (!Array.isArray(output)) return "";
+  for (const item of output) {
+    if (item && typeof item === "object" && "text" in item && typeof (item as Record<string, unknown>).text === "string") {
+      const t = ((item as Record<string, unknown>).text as string).trim();
+      if (t) return t;
+    }
+  }
+  return "";
 }
 
-async function correctText(
-  text: string,
-  language: string,
-  tone: string
-): Promise<CorrectionResult> {
+// ── Gemini (fallback) ──
+
+async function correctWithGemini(text: string, language: string): Promise<string> {
+  const model = getGenAI().getGenerativeModel({
+    model: GEMINI_MODEL,
+    generationConfig: { temperature: 0.1, maxOutputTokens: 256, thinkingConfig: { thinkingBudget: 0 } } as any,
+  });
+  const prompt = `${SYSTEM_PROMPT(language)}\n\nText: ${text}`;
+  const result = await model.generateContent(prompt);
+  const corrected = result.response.text().trim();
+  if (!corrected) throw new Error("Empty response from Gemini");
+  return corrected;
+}
+
+// ── Provider selection: OpenAI primary, Gemini fallback ──
+
+interface CorrectionResult {
+  correctedText: string; engine: string; actualProvider: string; actualModel: string;
+  usedFallback: boolean; providerMs: number; fallbackMs: number;
+}
+
+async function correctText(text: string, language: string): Promise<CorrectionResult> {
+  const hasOAI = hasOpenAIKey();
   const hasGemini = !!process.env.GEMINI_API_KEY;
-  const hasOpenAI = !!process.env.OPENAI_API_KEY;
+  if (!hasOAI && !hasGemini) throw new Error("No AI API key configured.");
 
-  if (!hasGemini && !hasOpenAI) {
-    throw new Error("No AI API key configured.");
-  }
-
-  if (hasGemini) {
+  if (hasOAI) {
     const t0 = Date.now();
     try {
-      const corrected = await correctWithGemini(text, language, tone);
-      return { correctedText: corrected, engine: "gemini", actualProvider: "gemini", actualModel: "gemini-2.5-flash-lite", usedFallback: false, providerMs: Date.now() - t0, fallbackMs: 0 };
-    } catch (e) {
-      const geminiMs = Date.now() - t0;
-      console.warn("Gemini failed:", e);
-      if (hasOpenAI) {
+      const corrected = await correctWithOpenAI(text, language);
+      return { correctedText: corrected, engine: "openai", actualProvider: "openai", actualModel: OPENAI_MODEL, usedFallback: false, providerMs: Date.now() - t0, fallbackMs: 0 };
+    } catch (e: any) {
+      const oaiMs = Date.now() - t0;
+      console.warn(`[AI_PROVIDER_FAIL] provider=openai model=${OPENAI_MODEL} errorName=${e?.name || "-"} status=${e?.status || "-"} message=${String(e?.message || "").slice(0, 120)}`);
+      if (hasGemini) {
         const t1 = Date.now();
-        const corrected = await correctWithOpenAI(text, language, tone);
-        return { correctedText: corrected, engine: "openai", actualProvider: "openai", actualModel: "gpt-4o-mini", usedFallback: true, providerMs: Date.now() - t1, fallbackMs: geminiMs };
+        const corrected = await correctWithGemini(text, language);
+        return { correctedText: corrected, engine: "gemini", actualProvider: "gemini", actualModel: GEMINI_MODEL, usedFallback: true, providerMs: Date.now() - t1, fallbackMs: oaiMs };
       }
       throw e;
     }
   }
 
   const t0 = Date.now();
-  const corrected = await correctWithOpenAI(text, language, tone);
-  return { correctedText: corrected, engine: "openai", actualProvider: "openai", actualModel: "gpt-4o-mini", usedFallback: false, providerMs: Date.now() - t0, fallbackMs: 0 };
+  const corrected = await correctWithGemini(text, language);
+  return { correctedText: corrected, engine: "gemini", actualProvider: "gemini", actualModel: GEMINI_MODEL, usedFallback: false, providerMs: Date.now() - t0, fallbackMs: 0 };
 }
 
-// ── Edge Handler ─────────────────────────────────────
+// ── CORS ──
+
+const CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, X-OneBoard-Request-ID",
+};
+
+// ── Edge Handler ──
+
+interface CorrectRequestBody { text?: unknown; language?: unknown; tone?: unknown; tier?: unknown; model?: unknown; requestId?: unknown; }  // tone tolerated but ignored
 
 export default async function handler(req: Request): Promise<Response> {
   const serverStart = Date.now();
 
-  // CORS preflight
-  if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, X-OneBoard-Request-ID",
-      },
-    });
-  }
-
-  if (req.method !== "POST") {
-    return Response.json({ error: "Method not allowed" }, { status: 405 });
-  }
+  if (req.method === "OPTIONS") return new Response(null, { status: 200, headers: CORS_HEADERS });
+  if (req.method !== "POST") return Response.json({ error: "Method not allowed" }, { status: 405, headers: CORS_HEADERS });
 
   const reqId = req.headers.get("X-OneBoard-Request-ID") || "";
 
   try {
-    const body = await req.json();
+    const body = (await req.json()) as CorrectRequestBody;
     const parseMs = Date.now() - serverStart;
-    const { text, language, tone, tier, model: requestedModel, requestId: bodyReqId } = body;
-    const finalReqId = reqId || bodyReqId || "";
+    const text = typeof body.text === "string" ? body.text : "";
+    const language = typeof body.language === "string" ? body.language : "";
+    // tone is tolerated in legacy request bodies but no longer used for correction
+    const tier = typeof body.tier === "string" ? body.tier : "-";
+    const requestedModel = typeof body.model === "string" ? body.model : "-";
+    const finalReqId = reqId || (typeof body.requestId === "string" ? body.requestId : "");
 
-    const validTones = ["none", "casual", "formal", "polished"];
-    const safeTone = validTones.includes(tone) ? tone : "none";
-
-    if (!text || typeof text !== "string" || text.trim().length === 0) {
-      return Response.json({ error: "text is required" }, { status: 400 });
-    }
-
-    if (text.length > MAX_TEXT_LENGTH) {
-      return Response.json({ error: `text exceeds maximum length of ${MAX_TEXT_LENGTH}` }, { status: 400 });
-    }
-
-    if (!language || !VALID_LANGUAGES.includes(language)) {
-      return Response.json({ error: "Invalid language" }, { status: 400 });
-    }
+    if (!text || text.trim().length === 0) return Response.json({ error: "text is required" }, { status: 400, headers: CORS_HEADERS });
+    if (text.length > MAX_TEXT_LENGTH) return Response.json({ error: `text exceeds maximum length of ${MAX_TEXT_LENGTH}` }, { status: 400, headers: CORS_HEADERS });
+    if (!language || !VALID_LANGUAGES.includes(language)) return Response.json({ error: "Invalid language" }, { status: 400, headers: CORS_HEADERS });
 
     const validationMs = Date.now() - serverStart;
-    const result = await correctText(text.trim(), language, safeTone);
+    const result = await correctText(text.trim(), language);
     const serverTotalMs = Date.now() - serverStart;
 
-    // Server-side latency log (no raw text)
-    console.log(`[AI_LATENCY_SERVER] requestId=${finalReqId} mode=correct charCount=${text.trim().length} language=${language} tone=${safeTone} tier=${tier || "-"} requestedModel=${requestedModel || "-"} actualProvider=${result.actualProvider} actualModel=${result.actualModel} usedFallback=${result.usedFallback} parseMs=${parseMs} validationMs=${validationMs} providerMs=${result.providerMs} fallbackMs=${result.fallbackMs} serverTotalMs=${serverTotalMs}`);
+    console.log(`[AI_LATENCY_SERVER] requestId=${finalReqId} mode=correct charCount=${text.trim().length} language=${language} tier=${tier} requestedModel=${requestedModel} actualProvider=${result.actualProvider} actualModel=${result.actualModel} usedFallback=${result.usedFallback} parseMs=${parseMs} validationMs=${validationMs} providerMs=${result.providerMs} fallbackMs=${result.fallbackMs} serverTotalMs=${serverTotalMs}`);
 
-    const meta = {
-      requestId: finalReqId,
-      mode: "correct",
-      actualProvider: result.actualProvider,
-      actualModel: result.actualModel,
-      usedFallback: result.usedFallback,
-      serverTotalMs,
-      providerMs: result.providerMs,
-    };
+    const meta = { requestId: finalReqId, mode: "correct", actualProvider: result.actualProvider, actualModel: result.actualModel, usedFallback: result.usedFallback, serverTotalMs, providerMs: result.providerMs };
 
     const headers: Record<string, string> = {
-      "Access-Control-Allow-Origin": "*",
+      ...CORS_HEADERS,
       "Content-Type": "application/json",
       "X-OneBoard-Request-ID": finalReqId,
       "X-OneBoard-AI-Provider": result.actualProvider,
@@ -217,9 +178,6 @@ export default async function handler(req: Request): Promise<Response> {
   } catch (error) {
     const serverTotalMs = Date.now() - serverStart;
     console.error(`[AI_LATENCY_SERVER] requestId=${reqId} mode=correct status=error serverTotalMs=${serverTotalMs} error=${error}`);
-    return Response.json(
-      { error: "Internal server error" },
-      { status: 500, headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" } }
-    );
+    return Response.json({ error: "Internal server error" }, { status: 500, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } });
   }
 }
