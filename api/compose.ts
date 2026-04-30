@@ -111,7 +111,12 @@ const SYSTEM_PROMPT = (tone: string, language: string, length: string, replyCont
   base += `Output the composed message only — no explanations, no labels, no quotes.`;
 
   if (replyContext) {
-    base += `\n\nThe user is replying to this message: "${replyContext}"\nWrite an appropriate reply based on the user's instructions.`;
+    base += `\n\nIMPORTANT — REPLY MODE:`;
+    base += `\nThe user is replying to the following message:`;
+    base += `\n"${replyContext}"`;
+    base += `\n\nYour PRIMARY task is to write a reply that directly addresses and responds to the message above.`;
+    base += `\nThe user's prompt below provides supplementary context (e.g. profile details, interests, situation) to personalize the reply — but the reply MUST be centered on responding to the received message, NOT on the supplementary context alone.`;
+    base += `\nDo NOT write an opening message or self-introduction. Write a contextual, conversational reply.`;
   }
 
   return base;

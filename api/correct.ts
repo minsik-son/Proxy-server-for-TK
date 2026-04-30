@@ -97,11 +97,21 @@ async function correctWithOpenAI(
 
 // ── Provider selection with fallback ─────────────────
 
+interface CorrectionResult {
+  correctedText: string;
+  engine: string;
+  actualProvider: string;
+  actualModel: string;
+  usedFallback: boolean;
+  providerMs: number;
+  fallbackMs: number;
+}
+
 async function correctText(
   text: string,
   language: string,
   tone: string
-): Promise<{ correctedText: string; engine: string }> {
+): Promise<CorrectionResult> {
   const hasGemini = !!process.env.GEMINI_API_KEY;
   const hasOpenAI = !!process.env.OPENAI_API_KEY;
 
@@ -109,28 +119,33 @@ async function correctText(
     throw new Error("No AI API key configured.");
   }
 
-  // Try Gemini first (faster), fallback to OpenAI
   if (hasGemini) {
+    const t0 = Date.now();
     try {
       const corrected = await correctWithGemini(text, language, tone);
-      return { correctedText: corrected, engine: "gemini" };
+      return { correctedText: corrected, engine: "gemini", actualProvider: "gemini", actualModel: "gemini-2.5-flash-lite", usedFallback: false, providerMs: Date.now() - t0, fallbackMs: 0 };
     } catch (e) {
+      const geminiMs = Date.now() - t0;
       console.warn("Gemini failed:", e);
       if (hasOpenAI) {
+        const t1 = Date.now();
         const corrected = await correctWithOpenAI(text, language, tone);
-        return { correctedText: corrected, engine: "openai" };
+        return { correctedText: corrected, engine: "openai", actualProvider: "openai", actualModel: "gpt-4o-mini", usedFallback: true, providerMs: Date.now() - t1, fallbackMs: geminiMs };
       }
       throw e;
     }
   }
 
+  const t0 = Date.now();
   const corrected = await correctWithOpenAI(text, language, tone);
-  return { correctedText: corrected, engine: "openai" };
+  return { correctedText: corrected, engine: "openai", actualProvider: "openai", actualModel: "gpt-4o-mini", usedFallback: false, providerMs: Date.now() - t0, fallbackMs: 0 };
 }
 
 // ── Edge Handler ─────────────────────────────────────
 
 export default async function handler(req: Request): Promise<Response> {
+  const serverStart = Date.now();
+
   // CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -138,7 +153,7 @@ export default async function handler(req: Request): Promise<Response> {
       headers: {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Headers": "Content-Type, X-OneBoard-Request-ID",
       },
     });
   }
@@ -147,45 +162,64 @@ export default async function handler(req: Request): Promise<Response> {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
   }
 
-  const headers = {
-    "Access-Control-Allow-Origin": "*",
-    "Content-Type": "application/json",
-  };
+  const reqId = req.headers.get("X-OneBoard-Request-ID") || "";
 
   try {
     const body = await req.json();
-    const { text, language, tone } = body;
+    const parseMs = Date.now() - serverStart;
+    const { text, language, tone, tier, model: requestedModel, requestId: bodyReqId } = body;
+    const finalReqId = reqId || bodyReqId || "";
 
     const validTones = ["none", "casual", "formal", "polished"];
     const safeTone = validTones.includes(tone) ? tone : "none";
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
-      return Response.json({ error: "text is required" }, { status: 400, headers });
+      return Response.json({ error: "text is required" }, { status: 400 });
     }
 
     if (text.length > MAX_TEXT_LENGTH) {
-      return Response.json(
-        { error: `text exceeds maximum length of ${MAX_TEXT_LENGTH}` },
-        { status: 400, headers }
-      );
+      return Response.json({ error: `text exceeds maximum length of ${MAX_TEXT_LENGTH}` }, { status: 400 });
     }
 
     if (!language || !VALID_LANGUAGES.includes(language)) {
-      return Response.json({ error: "Invalid language" }, { status: 400, headers });
+      return Response.json({ error: "Invalid language" }, { status: 400 });
     }
 
-    const { correctedText, engine } = await correctText(
-      text.trim(),
-      language,
-      safeTone
-    );
+    const validationMs = Date.now() - serverStart;
+    const result = await correctText(text.trim(), language, safeTone);
+    const serverTotalMs = Date.now() - serverStart;
 
-    return Response.json({ correctedText, engine }, { headers });
+    // Server-side latency log (no raw text)
+    console.log(`[AI_LATENCY_SERVER] requestId=${finalReqId} mode=correct charCount=${text.trim().length} language=${language} tone=${safeTone} tier=${tier || "-"} requestedModel=${requestedModel || "-"} actualProvider=${result.actualProvider} actualModel=${result.actualModel} usedFallback=${result.usedFallback} parseMs=${parseMs} validationMs=${validationMs} providerMs=${result.providerMs} fallbackMs=${result.fallbackMs} serverTotalMs=${serverTotalMs}`);
+
+    const meta = {
+      requestId: finalReqId,
+      mode: "correct",
+      actualProvider: result.actualProvider,
+      actualModel: result.actualModel,
+      usedFallback: result.usedFallback,
+      serverTotalMs,
+      providerMs: result.providerMs,
+    };
+
+    const headers: Record<string, string> = {
+      "Access-Control-Allow-Origin": "*",
+      "Content-Type": "application/json",
+      "X-OneBoard-Request-ID": finalReqId,
+      "X-OneBoard-AI-Provider": result.actualProvider,
+      "X-OneBoard-AI-Model": result.actualModel,
+      "X-OneBoard-Server-Timing-Ms": String(serverTotalMs),
+      "Server-Timing": `parse;dur=${parseMs}, provider;dur=${result.providerMs}, total;dur=${serverTotalMs}`,
+      "Access-Control-Expose-Headers": "X-OneBoard-Request-ID, X-OneBoard-AI-Provider, X-OneBoard-AI-Model, X-OneBoard-Server-Timing-Ms, Server-Timing",
+    };
+
+    return Response.json({ correctedText: result.correctedText, engine: result.engine, meta }, { headers });
   } catch (error) {
-    console.error("Correction error:", error);
+    const serverTotalMs = Date.now() - serverStart;
+    console.error(`[AI_LATENCY_SERVER] requestId=${reqId} mode=correct status=error serverTotalMs=${serverTotalMs} error=${error}`);
     return Response.json(
       { error: "Internal server error" },
-      { status: 500, headers }
+      { status: 500, headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" } }
     );
   }
 }
