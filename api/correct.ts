@@ -29,7 +29,7 @@ const VALID_LANGUAGES = ["ko","en","ja","zh","es","fr","de","pt","ru","it"];
 const MAX_TEXT_LENGTH = 200;
 
 const SYSTEM_PROMPT = (language: string) =>
-  `Fix spelling, typos, and spacing only. Do NOT add or remove punctuation. Return corrected text only. Language: ${language}`;
+  `Fix spelling, typos, and spacing only. Do NOT add or remove punctuation. Return corrected text only. If no correction is needed, return the original text unchanged. Never return an empty response. Language: ${language}`;
 
 // ── OpenAI GPT-5 Nano (primary) via Responses API ──
 
@@ -41,36 +41,66 @@ async function correctWithOpenAI(text: string, language: string): Promise<string
     body: JSON.stringify({
       model: OPENAI_MODEL,
       instructions: SYSTEM_PROMPT(language),
-      input: text,
+      input: [{ role: "user", content: [{ type: "input_text", text }] }],
       reasoning: { effort: "minimal" },
       text: { verbosity: "low" },
-      max_output_tokens: 256,
+      max_output_tokens: 1024,
     }),
   });
 
   if (!res.ok) {
-    const status = res.status;
-    throw new Error(`OpenAI HTTP ${status}`);
+    const errorBody = await res.text();
+    console.warn(`[AI_PROVIDER_FAIL] provider=openai model=${OPENAI_MODEL} httpStatus=${res.status} body=${errorBody.slice(0, 300)}`);
+    throw new Error(`OpenAI HTTP ${res.status}`);
   }
 
   const data = await res.json();
-  const result = typeof data.output_text === "string" && data.output_text.trim()
-    ? data.output_text.trim()
-    : extractTextFromOutput(data.output);
+  const result = extractResponseText(data);
 
-  if (!result) throw new Error("Empty response from OpenAI");
+  if (!result) {
+    console.warn(`[AI_PROVIDER_EMPTY] provider=openai model=${OPENAI_MODEL} ${summarizeOpenAIResponse(data)}`);
+    throw new Error("Empty response from OpenAI");
+  }
   return result;
 }
 
-function extractTextFromOutput(output: unknown): string {
-  if (!Array.isArray(output)) return "";
-  for (const item of output) {
-    if (item && typeof item === "object" && "text" in item && typeof (item as Record<string, unknown>).text === "string") {
-      const t = ((item as Record<string, unknown>).text as string).trim();
-      if (t) return t;
-    }
+function extractResponseText(data: unknown): string {
+  const root = data as Record<string, unknown>;
+  if (typeof root.output_text === "string" && root.output_text.trim()) {
+    return root.output_text.trim();
   }
-  return "";
+  const parts: string[] = [];
+  collectTextParts(root.output, parts);
+  return parts.join("").trim();
+}
+
+function collectTextParts(value: unknown, parts: string[]): void {
+  if (Array.isArray(value)) {
+    for (const item of value) collectTextParts(item, parts);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.text === "string" && obj.text.trim()) {
+    parts.push(obj.text);
+  }
+  if (Array.isArray(obj.content)) collectTextParts(obj.content, parts);
+  if (Array.isArray(obj.output)) collectTextParts(obj.output, parts);
+}
+
+function summarizeOpenAIResponse(data: unknown): string {
+  const root = data as Record<string, unknown>;
+  const status = typeof root.status === "string" ? root.status : "-";
+  const incomplete = JSON.stringify(root.incomplete_details ?? null).slice(0, 200);
+  const usage = root.usage && typeof root.usage === "object" ? root.usage as Record<string, unknown> : {};
+  const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : "-";
+  const totalTokens = typeof usage.total_tokens === "number" ? usage.total_tokens : "-";
+  const reasoningTokens = usage.output_tokens_details && typeof usage.output_tokens_details === "object"
+    && typeof (usage.output_tokens_details as Record<string, unknown>).reasoning_tokens === "number"
+    ? (usage.output_tokens_details as Record<string, unknown>).reasoning_tokens : "-";
+  const outputTypes = Array.isArray(root.output)
+    ? root.output.map(item => item && typeof item === "object" ? String((item as Record<string, unknown>).type || "-") : "-").join(",") : "-";
+  return `status=${status} incomplete=${incomplete} outputTokens=${outputTokens} reasoningTokens=${reasoningTokens} totalTokens=${totalTokens} outputTypes=${outputTypes}`;
 }
 
 // ── Gemini (fallback) ──
