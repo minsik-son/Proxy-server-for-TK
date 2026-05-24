@@ -25,24 +25,83 @@ function getGenAI(): GoogleGenerativeAI {
   return _genAI;
 }
 
-const VALID_LANGUAGES = ["ko","en","ja","zh","es","fr","de","pt","ru","it"];
+const VALID_LANGUAGES = ["ko","en","ja","zh-CN","zh-TW","zh","vi","th","id","es","fr","de","pt","ru","it"];
 const MAX_TEXT_LENGTH = 200;
 
-const SYSTEM_PROMPT = (language: string) =>
-  `Fix spelling, typos, and spacing only. Do NOT add or remove punctuation. Return corrected text only. If no correction is needed, return the original text unchanged. Never return an empty response. Language: ${language}`;
+// ── Language-specific correction prompt factory ──
+
+type CorrectionLanguage = "ko"|"en"|"ja"|"zh-CN"|"zh-TW"|"vi"|"th"|"id"|"es"|"fr"|"de"|"ru"|"it"|"pt";
+
+function normalizeCorrectionLanguage(language: string): CorrectionLanguage {
+  if (language === "zh") return "zh-CN";
+  if (VALID_LANGUAGES.includes(language)) return language as CorrectionLanguage;
+  return "en";
+}
+
+const UNIVERSAL_RULES = `Return corrected text only. Do not explain. Do not wrap in quotes or Markdown. Preserve original language. Do not translate. Do not summarize. Preserve user meaning, tone/register, and intent. Fix typos, spelling, spacing, grammar, word-form errors, and keyboard/composition errors. Allow minimal punctuation changes only when clearly needed for correctness. Preserve emojis and slang unless they are clearly part of a typo. If no correction is needed, return the original text unchanged. Never return an empty response.`;
+
+function correctionSystemPrompt(language: CorrectionLanguage): string {
+  switch (language) {
+    case "ko":
+      return `You are a Korean text correction assistant.\n${UNIVERSAL_RULES}\nKorean-specific rules:\n- Fix Hangul jamo/composition mistakes (e.g. 호ㅓㄱ실히→확실히).\n- Fix keyboard/vowel/consonant typos (e.g. 어타교정→오타교정).\n- Fix contextual word errors and spacing (e.g. 제아름→제 이름, 하나있누데→하나 있는데).\n- Fix natural Korean particles and endings (e.g. 구린게→구린 게).\n- Preserve speech level. Do not formalize casual/polite text unnecessarily. 안녕허시오→안녕하세요 (not 안녕하십니까).\n- Remove stray jamo only if clearly unintentional (e.g. trailing ㅠ from typo).`;
+
+    case "en":
+      return `You are an English text correction assistant.\n${UNIVERSAL_RULES}\nEnglish-specific rules:\n- Fix keyboard typos, spelling, grammar, and missing spaces.\n- Preserve contractions and casual/professional tone.\n- Do not rewrite style unless needed for correction.`;
+
+    case "ja":
+      return `You are a Japanese text correction assistant.\n${UNIVERSAL_RULES}\nJapanese-specific rules:\n- Fix kana typos, particles (は/わ), okurigana, and common conversion errors.\n- Preserve polite/casual register.\n- Do not over-convert kana to kanji when the original style is natural.`;
+
+    case "zh-CN":
+      return `You are a Simplified Chinese text correction assistant.\n${UNIVERSAL_RULES}\nChinese-specific rules:\n- Fix homophone/contextual typos, word segmentation, and punctuation.\n- Use Simplified Chinese characters only.\n- Do not convert to Traditional Chinese.`;
+
+    case "zh-TW":
+      return `You are a Traditional Chinese text correction assistant.\n${UNIVERSAL_RULES}\nChinese-specific rules:\n- Fix homophone/contextual typos, word segmentation, and punctuation.\n- Use Traditional Chinese characters only.\n- Do not convert to Simplified Chinese.`;
+
+    case "es":
+      return `You are a Spanish text correction assistant.\n${UNIVERSAL_RULES}\nSpanish-specific rules:\n- Fix accents, ñ, gender/number agreement, and verb conjugation.\n- Add inverted punctuation (¿¡) only when clearly appropriate.\n- Preserve tú/usted/voseo style.`;
+
+    case "fr":
+      return `You are a French text correction assistant.\n${UNIVERSAL_RULES}\nFrench-specific rules:\n- Fix accents, agreement (gender/number), elision, and conjugation.\n- Preserve tu/vous register.`;
+
+    case "de":
+      return `You are a German text correction assistant.\n${UNIVERSAL_RULES}\nGerman-specific rules:\n- Fix capitalization of nouns, compounds, umlauts (ä/ö/ü/ß), and grammar.\n- Preserve formal/informal (Sie/du) register.`;
+
+    case "it":
+      return `You are an Italian text correction assistant.\n${UNIVERSAL_RULES}\nItalian-specific rules:\n- Fix accents, articles, agreement (gender/number), and conjugation.`;
+
+    case "ru":
+      return `You are a Russian text correction assistant.\n${UNIVERSAL_RULES}\nRussian-specific rules:\n- Fix Cyrillic typos, case endings, agreement, and spelling.`;
+
+    case "vi":
+      return `You are a Vietnamese text correction assistant.\n${UNIVERSAL_RULES}\nVietnamese-specific rules:\n- Fix tone marks/diacritics and word spacing.\n- Preserve regional dialect differences when not clearly wrong.`;
+
+    case "th":
+      return `You are a Thai text correction assistant.\n${UNIVERSAL_RULES}\nThai-specific rules:\n- Fix spelling and spacing conventions.\n- Do not add spaces between every word; follow natural Thai spacing.`;
+
+    case "id":
+      return `You are an Indonesian text correction assistant.\n${UNIVERSAL_RULES}\nIndonesian-specific rules:\n- Fix affixes (me-, ber-, di-, ke-an, etc.), spacing, and common typos.`;
+
+    case "pt":
+      return `You are a Portuguese text correction assistant.\n${UNIVERSAL_RULES}\nPortuguese-specific rules:\n- Fix accents, agreement, and conjugation.`;
+
+    default:
+      return `You are a text correction assistant.\n${UNIVERSAL_RULES}\nLanguage: ${language}`;
+  }
+}
 
 // ── OpenAI GPT-5 Nano (primary) via Responses API ──
 
 async function correctWithOpenAI(text: string, language: string): Promise<string> {
   const apiKey = getOpenAIKey();
+  const normalizedLang = normalizeCorrectionLanguage(language);
   const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      instructions: SYSTEM_PROMPT(language),
+      instructions: correctionSystemPrompt(normalizedLang),
       input: [{ role: "user", content: [{ type: "input_text", text }] }],
-      reasoning: { effort: "minimal" },
+      reasoning: { effort: "low" },
       text: { verbosity: "low" },
       max_output_tokens: 1024,
     }),
@@ -106,11 +165,12 @@ function summarizeOpenAIResponse(data: unknown): string {
 // ── Gemini (fallback) ──
 
 async function correctWithGemini(text: string, language: string): Promise<string> {
+  const normalizedLang = normalizeCorrectionLanguage(language);
   const model = getGenAI().getGenerativeModel({
     model: GEMINI_MODEL,
     generationConfig: { temperature: 0.1, maxOutputTokens: 256, thinkingConfig: { thinkingBudget: 0 } } as any,
   });
-  const prompt = `${SYSTEM_PROMPT(language)}\n\nText: ${text}`;
+  const prompt = `${correctionSystemPrompt(normalizedLang)}\n\nText: ${text}`;
   const result = await model.generateContent(prompt);
   const corrected = result.response.text().trim();
   if (!corrected) throw new Error("Empty response from Gemini");
